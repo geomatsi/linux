@@ -7,69 +7,319 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/rpmsg.h>
+#include <linux/errno.h>
+#include <linux/timekeeping.h>
+#include <linux/netdevice.h>
+#include <linux/can/dev.h>
+#include <linux/can.h>
 
-#define MSG		"hello world!"
+#define RPMSG_CAN_CLOCKS	16000000
+#define RPMSG_CAN_MAXDEV	2
+#define RPMSG_CAN_TXBUFS	1
 
-static int count = 100;
-module_param(count, int, 0644);
+#define HANDSHAKE	"TEST"
 
-struct instance_data {
-	int rx_count;
+struct can_rpmsg_hub {
+	struct rpmsg_device *rpdev;
+	struct net_device *netdev[RPMSG_CAN_MAXDEV];
+	struct work_struct tx_wq;
+	struct sk_buff_head txq;
+	int devnum;
 };
 
-static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
-			void *priv, u32 src)
+struct can_rpmsg_netdev_priv {
+	struct can_priv can;
+	struct can_rpmsg_hub *hub;
+	int is_canfd;
+	int index;
+};
+
+/* fw assumption:
+ * - dst: general remote addr
+ * - dst + index + 1: per-device addr
+ */
+static inline int skb_dst_addr(struct can_rpmsg_hub *hub, struct sk_buff *skb)
 {
-	struct instance_data *idata = dev_get_drvdata(&rpdev->dev);
-	int ret;
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(skb->dev);
+	int index = priv->index;
 
-	dev_info(&rpdev->dev, "incoming msg %d (src: 0x%x)\n",
-		 ++idata->rx_count, src);
+	return (hub->rpdev->dst + index + 1);
+}
 
-	print_hex_dump_debug(__func__, DUMP_PREFIX_NONE, 16, 1, data, len,
-			     true);
+static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
+			void *rpmsg_priv, u32 src)
+{
+	struct device *dev = &rpdev->dev;
+	struct can_rpmsg_hub *hub = dev_get_drvdata(dev);
+	struct can_rpmsg_netdev_priv *priv;
+	struct skb_shared_hwtstamps *skt;
+	struct net_device *netdev;
+	struct canfd_frame *cfd;
+	struct timespec64 ts;
+	struct sk_buff *skb;
+	int idx;
+	int ret = 0;
 
-	/* samples should not live forever */
-	if (idata->rx_count >= count) {
-		dev_info(&rpdev->dev, "goodbye!\n");
-		return 0;
+	/* fw assumption: src can be convered to CAN device index */
+	dev_info(dev, "can frame from src(0x%x): len %d\n", src, len);
+	idx = src - rpdev->dst - 1;
+
+	if (idx >= hub->devnum) {
+		dev_err(dev, "invalid frame source: idx(0x%x)\n", idx);
+		return -ENODEV;
 	}
 
-	/* send a new message now */
-	ret = rpmsg_send(rpdev->ept, MSG, strlen(MSG));
+	netdev = hub->netdev[idx];
+	priv = netdev_priv(netdev);
+
+	if (priv->is_canfd)
+		skb = alloc_canfd_skb(netdev, &cfd);
+	else
+		skb = alloc_can_skb(netdev, (struct can_frame **)&cfd);
+
+	if (!skb) {
+		dev_err(dev, "alloc_can_skb failed for can %d\n", idx);
+		netdev->stats.rx_dropped += 1;
+		ret = -ENOMEM;
+		goto err_recv;
+	}
+
+	if (skb->len < len) {
+		dev_err(dev, "unexpected frame length: %d instead of %d\n",
+			len, skb->len);
+		netdev->stats.rx_dropped += 1;
+		ret = -EINVAL;
+		goto err_recv;
+	}
+
+	/* fw assumption:  data from fw is can_frame or canfd_frame */
+	memcpy(cfd, data, len);
+
+	ktime_get_real_ts64(&ts);
+	skt = skb_hwtstamps(skb);
+	skt->hwtstamp = timespec64_to_ktime(ts);
+	skb->tstamp = timespec64_to_ktime(ts);
+
+	netdev->stats.rx_bytes += cfd->len;
+	netdev->stats.rx_packets++;
+
+	netif_rx(skb);
+
+	return ret;
+
+err_recv:
+	kfree_skb(skb);
+	return ret;
+}
+
+static void can_rpmsg_tx_work(struct work_struct *work)
+{
+	struct can_rpmsg_hub *hub =
+		container_of(work, struct can_rpmsg_hub, tx_wq);
+	struct rpmsg_device *rpdev = hub->rpdev;
+	struct device *dev = &rpdev->dev;
+	struct sk_buff *skb;
+	u32 dst;
+	int ret;
+
+	while ((skb = skb_dequeue(&hub->txq)) != NULL) {
+		dst = skb_dst_addr(hub, skb);
+		ret = rpmsg_sendto(rpdev->ept, skb->data, skb->len, dst);
+		if (ret) {
+			dev_err(dev, "failed to send frame to %d: %d\n",
+				dst, ret);
+			skb->dev->stats.tx_dropped++;
+		}
+
+		kfree_skb(skb);
+	}
+}
+
+static netdev_tx_t can_rpmsg_netdev_start_xmit(struct sk_buff *skb,
+					       struct net_device *netdev)
+{
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(netdev);
+	struct can_rpmsg_hub *hub = priv->hub;
+	struct device *dev = &hub->rpdev->dev;
+	u8 index = priv->index;
+
+	if (can_dropped_invalid_skb(netdev, skb)) {
+		dev_err(dev, "Drop invalid can frame\n");
+		return NETDEV_TX_OK;
+	}
+
+	if (index >= RPMSG_CAN_MAXDEV) {
+		dev_err(dev, "vif index is out of range: %d < %d\n",
+			index, RPMSG_CAN_MAXDEV);
+		netdev->stats.tx_dropped++;
+		kfree_skb(skb);
+		goto out;
+	}
+
+	if (unlikely(skb->dev != netdev)) {
+		dev_err(dev, "invalid skb->dev\n");
+		netdev->stats.tx_dropped++;
+		kfree_skb(skb);
+		goto out;
+	}
+
+	skb_queue_tail(&hub->txq, skb);
+	queue_work(system_highpri_wq, &hub->tx_wq);
+
+out:
+	return NETDEV_TX_OK;
+}
+
+static int can_rpmsg_netdev_open(struct net_device *netdev)
+{
+	int ret;
+
+	ret = open_candev(netdev);
 	if (ret)
-		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
+		return ret;
+
+	netif_start_queue(netdev);
 
 	return 0;
+}
+
+static int can_rpmsg_netdev_close(struct net_device *netdev)
+{
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(netdev);
+	struct can_rpmsg_hub *hub = priv->hub;
+
+	netif_stop_queue(netdev);
+	cancel_work_sync(&hub->tx_wq);
+	skb_queue_purge(&hub->txq);
+	close_candev(netdev);
+
+	return 0;
+}
+
+static const struct net_device_ops can_rpmsg_netdev_ops = {
+		.ndo_open = can_rpmsg_netdev_open,
+		.ndo_stop = can_rpmsg_netdev_close,
+		.ndo_start_xmit = can_rpmsg_netdev_start_xmit,
+};
+
+static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
+{
+	struct device *dev = &hub->rpdev->dev;
+	struct can_rpmsg_netdev_priv *priv;
+	struct net_device *netdev;
+
+	dev_info(dev, "create can device %d", hub->devnum);
+
+	if (hub->devnum >= RPMSG_CAN_MAXDEV) {
+		dev_err(dev, "too many CAN devices");
+		return ERR_PTR(-E2BIG);
+	}
+
+	netdev = alloc_candev(sizeof(*priv), RPMSG_CAN_TXBUFS);
+	if (!netdev)
+		return ERR_PTR(-ENOMEM);
+
+	priv = netdev_priv(netdev);
+	priv->hub = hub;
+	priv->index = hub->devnum;
+
+	hub->netdev[hub->devnum] = netdev;
+	hub->devnum += 1;
+
+	netdev->netdev_ops = &can_rpmsg_netdev_ops;
+	SET_NETDEV_DEV(netdev, dev);
+
+	priv->can.ctrlmode_supported =
+		CAN_CTRLMODE_3_SAMPLES | CAN_CTRLMODE_LISTENONLY;
+	priv->can.bittiming.bitrate = RPMSG_CAN_CLOCKS;
+
+	return netdev;
 }
 
 static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 {
+	struct device *dev = &rpdev->dev;
+	struct can_rpmsg_hub *hub;
+	struct net_device *netdev;
 	int ret;
-	struct instance_data *idata;
+	int i;
 
-	dev_info(&rpdev->dev, "new channel: 0x%x -> 0x%x!\n",
-					rpdev->src, rpdev->dst);
+	dev_info(dev, "new channel: 0x%x -> 0x%x!\n", rpdev->src, rpdev->dst);
 
-	idata = devm_kzalloc(&rpdev->dev, sizeof(*idata), GFP_KERNEL);
-	if (!idata)
-		return -ENOMEM;
-
-	dev_set_drvdata(&rpdev->dev, idata);
-
-	/* send a message to our remote processor */
-	ret = rpmsg_send(rpdev->ept, MSG, strlen(MSG));
+	/* fw assumption: advertise rpmsg address to firmware endpoint */
+	ret = rpmsg_send(rpdev->ept, HANDSHAKE, strlen(HANDSHAKE));
 	if (ret) {
-		dev_err(&rpdev->dev, "rpmsg_send failed: %d\n", ret);
-		return ret;
+		dev_err(&rpdev->dev, "rpmsg handshake failed: %d\n", ret);
+		return -EINVAL;
 	}
 
-	return 0;
+	hub = devm_kzalloc(dev, sizeof(*hub), GFP_KERNEL);
+	if (!hub)
+		return -ENOMEM;
+
+	INIT_WORK(&hub->tx_wq, can_rpmsg_tx_work);
+	skb_queue_head_init(&hub->txq);
+	dev_set_drvdata(dev, hub);
+	hub->rpdev = rpdev;
+
+	for (i = 0; i < RPMSG_CAN_MAXDEV; i++) {
+		netdev = rpmsg_add_candev(hub);
+		if (IS_ERR(netdev)) {
+			dev_err(dev, "Failed to add CAN device: %ld",
+				PTR_ERR(netdev));
+			ret = PTR_ERR(netdev);
+			goto candev_err;
+		}
+
+		ret = register_candev(netdev);
+		if (ret) {
+			dev_err(dev, "Failed to register CAN device: %d", ret);
+			goto candev_err;
+		}
+	}
+
+	return ret;
+
+candev_err:
+	for (i = 0; i < RPMSG_CAN_MAXDEV; i++) {
+		netdev = hub->netdev[i];
+
+		if (netdev) {
+			if (netdev->reg_state == NETREG_REGISTERED)
+				unregister_netdevice(netdev);
+
+			free_candev(netdev);
+		}
+	}
+
+	dev_set_drvdata(dev, NULL);
+	kfree(hub);
+
+	return ret;
 }
 
 static void can_rpmsg_remove(struct rpmsg_device *rpdev)
 {
+	struct device *dev = &rpdev->dev;
+	struct can_rpmsg_hub *hub = dev_get_drvdata(dev);
+	struct net_device *netdev;
+	int i;
+
 	dev_info(&rpdev->dev, "can rpmsg driver is removed\n");
+
+	for (i = 0; i < RPMSG_CAN_MAXDEV; i++) {
+		netdev = hub->netdev[i];
+
+		if (netdev) {
+			if (netdev->reg_state == NETREG_REGISTERED)
+				unregister_netdevice(netdev);
+
+			free_candev(netdev);
+		}
+	}
+
+	dev_set_drvdata(dev, NULL);
+	kfree(hub);
 }
 
 static struct rpmsg_device_id can_rpmsg_id_table[] = {
