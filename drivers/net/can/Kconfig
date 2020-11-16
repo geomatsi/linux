@@ -166,6 +166,13 @@ config PCH_CAN
 	  is an IOH for x86 embedded processor (Intel Atom E6xx series).
 	  This driver can access CAN bus.
 
+config CAN_RPMSG_IMX
+	tristate "i.MX8 FLEXCAN rpmsg driver"
+	depends on RPMSG
+	---help---
+	  This driver communicates with i.MX8 FLEXCAN devices handled by Cortex-M4 application core.
+	  This driver can access CAN bus.
+
 source "drivers/net/can/c_can/Kconfig"
 source "drivers/net/can/cc770/Kconfig"
 source "drivers/net/can/ifi_canfd/Kconfig"
