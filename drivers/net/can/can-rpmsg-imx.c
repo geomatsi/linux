@@ -38,12 +38,23 @@ struct can_rpmsg_netdev_priv {
  * - dst: general remote addr
  * - dst + index + 1: per-device addr
  */
-static inline int skb_dst_addr(struct can_rpmsg_hub *hub, struct sk_buff *skb)
+static inline int net2addr(struct net_device *ndev)
 {
-	struct can_rpmsg_netdev_priv *priv = netdev_priv(skb->dev);
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(ndev);
+	struct can_rpmsg_hub *hub = priv->hub;
 	int index = priv->index;
 
 	return (hub->rpdev->dst + index + 1);
+}
+
+static inline struct net_device *addr2net(struct can_rpmsg_hub *hub, int addr)
+{
+	int index = addr - hub->rpdev->dst - 1;
+
+	if (index < 0 || index > hub->devnum)
+		return NULL;
+
+	return hub->netdev[index];
 }
 
 static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
@@ -57,28 +68,25 @@ static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
 	struct canfd_frame *cfd;
 	struct timespec64 ts;
 	struct sk_buff *skb;
-	int idx;
 	int ret = 0;
 
 	/* fw assumption: src can be convered to CAN device index */
 	dev_info(dev, "can frame from src(0x%x): len %d\n", src, len);
-	idx = src - rpdev->dst - 1;
 
-	if (idx >= hub->devnum) {
-		dev_err(dev, "invalid frame source: idx(0x%x)\n", idx);
+	netdev = addr2net(hub, src);
+	if (!netdev) {
+		dev_err(dev, "invalid frame source: src(0x%x)\n", src);
 		return -ENODEV;
 	}
 
-	netdev = hub->netdev[idx];
 	priv = netdev_priv(netdev);
-
 	if (priv->is_canfd)
 		skb = alloc_canfd_skb(netdev, &cfd);
 	else
 		skb = alloc_can_skb(netdev, (struct can_frame **)&cfd);
 
 	if (!skb) {
-		dev_err(dev, "alloc_can_skb failed for can %d\n", idx);
+		dev_err(dev, "alloc_can_skb failed for can %d\n", priv->index);
 		netdev->stats.rx_dropped += 1;
 		ret = -ENOMEM;
 		goto err_recv;
@@ -123,7 +131,7 @@ static void can_rpmsg_tx_work(struct work_struct *work)
 	int ret;
 
 	while ((skb = skb_dequeue(&hub->txq)) != NULL) {
-		dst = skb_dst_addr(hub, skb);
+		dst = net2addr(skb->dev);
 		ret = rpmsg_sendto(rpdev->ept, skb->data, skb->len, dst);
 		if (ret) {
 			dev_err(dev, "failed to send frame to %d: %d\n",
