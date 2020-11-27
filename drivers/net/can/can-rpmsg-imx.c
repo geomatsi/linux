@@ -71,7 +71,7 @@ static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
 	int ret = 0;
 
 	/* fw assumption: src can be convered to CAN device index */
-	dev_info(dev, "can frame from src(0x%x): len %d\n", src, len);
+	dev_dbg(dev, "can frame from src(0x%x): len %d\n", src, len);
 
 	netdev = addr2net(hub, src);
 	if (!netdev) {
