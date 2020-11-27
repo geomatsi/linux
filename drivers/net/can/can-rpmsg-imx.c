@@ -291,11 +291,8 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 candev_err:
 	for (i = 0; i < RPMSG_CAN_MAXDEV; i++) {
 		netdev = hub->netdev[i];
-
 		if (netdev) {
-			if (netdev->reg_state == NETREG_REGISTERED)
-				unregister_netdevice(netdev);
-
+			unregister_candev(netdev);
 			free_candev(netdev);
 		}
 	}
@@ -313,15 +310,12 @@ static void can_rpmsg_remove(struct rpmsg_device *rpdev)
 	struct net_device *netdev;
 	int i;
 
-	dev_info(&rpdev->dev, "can rpmsg driver is removed\n");
+	dev_info(dev, "can rpmsg driver is removed\n");
 
 	for (i = 0; i < RPMSG_CAN_MAXDEV; i++) {
 		netdev = hub->netdev[i];
-
 		if (netdev) {
-			if (netdev->reg_state == NETREG_REGISTERED)
-				unregister_netdevice(netdev);
-
+			unregister_candev(netdev);
 			free_candev(netdev);
 		}
 	}
