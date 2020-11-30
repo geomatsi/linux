@@ -132,8 +132,14 @@ static void can_rpmsg_tx_work(struct work_struct *work)
 
 	while ((skb = skb_dequeue(&hub->txq)) != NULL) {
 		dst = net2addr(skb->dev);
-		ret = rpmsg_sendto(rpdev->ept, skb->data, skb->len, dst);
+		ret = rpmsg_trysendto(rpdev->ept, skb->data, skb->len, dst);
 		if (ret) {
+			if (ret == -ENOMEM) {
+				queue_work(system_highpri_wq, &hub->tx_wq);
+				skb_queue_head(&hub->txq, skb);
+				break;
+			}
+
 			dev_err(dev, "failed to send frame to %d: %d\n",
 				dst, ret);
 			skb->dev->stats.tx_dropped++;
