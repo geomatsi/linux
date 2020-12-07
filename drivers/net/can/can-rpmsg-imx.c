@@ -13,6 +13,8 @@
 #include <linux/can/dev.h>
 #include <linux/can.h>
 
+#include "can-rpmsg-ipc.h"
+
 #define CAN_RPMSG_MAJOR_VER	0
 #define CAN_RPMSG_MINOR_VER	1
 
@@ -22,16 +24,6 @@
 
 #define CAN_RPMSG_CMD_TIMEOUT	(1 * HZ)
 #define MAX_RPMSG_BUF_SIZE	(512)
-
-struct can_rpmsg_ctrl_hdr {
-	__le16 type;
-	__le16 len;
-} __packed;
-
-struct can_rpmsg_evt {
-	struct can_rpmsg_ctrl_hdr hdr;
-	__le16 id;
-} __packed;
 
 struct can_rpmsg_cmd_state {
 	struct completion cmd_completion;
@@ -59,46 +51,6 @@ struct can_rpmsg_netdev_priv {
 	int is_canfd;
 	int index;
 };
-
-/* cmd structs */
-
-enum can_rpmsg_ctrl_type {
-	CAN_RPMSG_CTRL_CMD = 1,
-	CAN_RPMSG_CTRL_RSP = 2,
-	CAN_RPMSG_CTRL_EVT = 3,
-};
-
-enum can_rpmsg_cmd_type {
-	CAN_RPMSG_CMD_INIT	= 0x0001,
-};
-
-struct can_rpmsg_cmd {
-	struct can_rpmsg_ctrl_hdr hdr;
-	__le16 id;
-	__le16 seq;
-} __packed;
-
-struct can_rpmsg_rsp {
-	struct can_rpmsg_ctrl_hdr hdr;
-	__le16 id;
-	__le16 seq;
-} __packed;
-
-struct can_rpmsg_cmd_init {
-	struct can_rpmsg_cmd hdr;
-	__le16 major;
-	__le16 minor;
-} __packed;
-
-struct can_rpmsg_cmd_init_rsp {
-	struct can_rpmsg_cmd hdr;
-	__le16 major;
-	__le16 minor;
-	__le16 result;
-	__le16 devnum;
-} __packed;
-
-/* cmd methods */
 
 static struct sk_buff *can_rpmsg_cmd_alloc(u16 cmd_no, size_t cmd_size)
 {
