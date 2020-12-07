@@ -568,6 +568,14 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 	if (!hub)
 		return -ENOMEM;
 
+	init_completion(&hub->curr_cmd.cmd_completion);
+	spin_lock_init(&hub->curr_cmd.rsp_lock);
+	mutex_init(&hub->curr_cmd.cmd_lock);
+
+	hub->curr_cmd.waiting_for_rsp = false;
+	hub->curr_cmd.skb_rsp = NULL;
+	hub->curr_cmd.seq = 0;
+
 	INIT_WORK(&hub->tx_wq, can_rpmsg_tx_work);
 	skb_queue_head_init(&hub->txq);
 
