@@ -41,6 +41,7 @@ struct can_rpmsg_rsp {
 	struct can_rpmsg_ctrl_hdr hdr;
 	__le16 id;
 	__le16 seq;
+	__le16 result;
 } __packed;
 
 struct can_rpmsg_cmd_init {
@@ -50,10 +51,9 @@ struct can_rpmsg_cmd_init {
 } __packed;
 
 struct can_rpmsg_cmd_init_rsp {
-	struct can_rpmsg_cmd hdr;
+	struct can_rpmsg_rsp hdr;
 	__le16 major;
 	__le16 minor;
-	__le16 result;
 	__le16 devnum;
 } __packed;
 

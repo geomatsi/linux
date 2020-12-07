@@ -208,7 +208,7 @@ static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub, u16 *devnum,
 		goto out;
 
 	cmd_rsp = (struct can_rpmsg_cmd_init_rsp *)skb_rsp->data;
-	ret = le16_to_cpu(cmd_rsp->result);
+	ret = le16_to_cpu(cmd_rsp->hdr.result);
 	if (ret)
 		goto out;
 
