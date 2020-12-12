@@ -59,6 +59,7 @@ struct can_rpmsg_cmd_init_rsp {
 	struct can_rpmsg_rsp hdr;
 	__le16 major;
 	__le16 minor;
+	__le32 bitrate;
 	__le16 devnum;
 } __packed;
 

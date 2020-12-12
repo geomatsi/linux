@@ -15,7 +15,6 @@
 
 #include "can-rpmsg-ipc.h"
 
-#define CAN_RPMSG_CLOCKS	16000000
 #define CAN_RPMSG_MAXDEV	10
 #define CAN_RPMSG_TXBUFS	1
 
@@ -181,7 +180,7 @@ out:
 }
 
 static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub, u16 *devnum,
-			      u16 *major, u16 *minor)
+			      u16 *major, u16 *minor, u32 *bitrate)
 {
 	struct can_rpmsg_cmd_init_rsp *cmd_rsp;
 	struct can_rpmsg_cmd_init *cmd;
@@ -209,6 +208,7 @@ static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub, u16 *devnum,
 	if (ret)
 		goto out;
 
+	*bitrate = le32_to_cpu(cmd_rsp->bitrate);
 	*devnum = le16_to_cpu(cmd_rsp->devnum);
 	*major = le16_to_cpu(cmd_rsp->major);
 	*minor = le16_to_cpu(cmd_rsp->minor);
@@ -514,7 +514,8 @@ static const struct net_device_ops can_rpmsg_netdev_ops = {
 		.ndo_start_xmit = can_rpmsg_netdev_start_xmit,
 };
 
-static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
+static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub,
+					   u32 bitrate)
 {
 	struct device *dev = &hub->rpdev->dev;
 	struct can_rpmsg_netdev_priv *priv;
@@ -543,7 +544,7 @@ static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
 
 	priv->can.ctrlmode_supported =
 		CAN_CTRLMODE_3_SAMPLES | CAN_CTRLMODE_LISTENONLY;
-	priv->can.bittiming.bitrate = CAN_RPMSG_CLOCKS;
+	priv->can.bittiming.bitrate = bitrate;
 
 	return netdev;
 }
@@ -553,6 +554,7 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 	struct device *dev = &rpdev->dev;
 	struct can_rpmsg_hub *hub;
 	struct net_device *netdev;
+	u32 bitrate;
 	u16 devnum;
 	u16 major;
 	u16 minor;
@@ -582,7 +584,7 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 	dev_set_drvdata(dev, hub);
 	hub->rpdev = rpdev;
 
-	ret = can_rpmsg_cmd_init(hub, &devnum, &major, &minor);
+	ret = can_rpmsg_cmd_init(hub, &devnum, &major, &minor, &bitrate);
 	if (ret) {
 		dev_err(&rpdev->dev, "failed to init fw: %d\n", ret);
 		return -EINVAL;
@@ -606,7 +608,7 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 			 major, minor);
 
 	for (i = 0; i < devnum; i++) {
-		netdev = rpmsg_add_candev(hub);
+		netdev = rpmsg_add_candev(hub, bitrate);
 		if (IS_ERR(netdev)) {
 			dev_err(dev, "Failed to add CAN device: %ld",
 				PTR_ERR(netdev));
