@@ -7,6 +7,9 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 
+#define CAN_RPMSG_MAJOR_VER	0
+#define CAN_RPMSG_MINOR_VER	1
+
 struct can_rpmsg_ctrl_hdr {
 	__le16 type;
 	__le16 len;
@@ -17,6 +20,7 @@ struct can_rpmsg_ctrl_hdr {
 struct can_rpmsg_evt {
 	struct can_rpmsg_ctrl_hdr hdr;
 	__le16 id;
+	u8 rsvd[2];
 } __packed;
 
 /* commands */
@@ -42,6 +46,7 @@ struct can_rpmsg_rsp {
 	__le16 id;
 	__le16 seq;
 	__le16 result;
+	u8 rsvd[2];
 } __packed;
 
 struct can_rpmsg_cmd_init {

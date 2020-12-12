@@ -15,9 +15,6 @@
 
 #include "can-rpmsg-ipc.h"
 
-#define CAN_RPMSG_MAJOR_VER	0
-#define CAN_RPMSG_MINOR_VER	1
-
 #define CAN_RPMSG_CLOCKS	16000000
 #define CAN_RPMSG_MAXDEV	10
 #define CAN_RPMSG_TXBUFS	1
