@@ -220,6 +220,70 @@ out:
 	return ret;
 }
 
+static int can_rpmsg_cmd_up(struct can_rpmsg_hub *hub, u32 index)
+{
+	struct can_rpmsg_rsp *cmd_rsp;
+	struct can_rpmsg_cmd_up *cmd;
+	struct sk_buff *skb_rsp = NULL;
+	struct sk_buff *skb_cmd;
+	int ret = 0;
+
+	skb_cmd = can_rpmsg_cmd_alloc(CAN_RPMSG_CMD_UP, sizeof(*cmd));
+	if (!skb_cmd)
+		return -ENOMEM;
+
+	mutex_lock(&hub->curr_cmd.cmd_lock);
+
+	cmd = (struct can_rpmsg_cmd_up *)skb_cmd->data;
+
+	cmd->index = cpu_to_le32(index);
+
+	ret = can_rpmsg_cmd_send(hub, skb_cmd, &skb_rsp, sizeof(*cmd_rsp));
+	if (ret)
+		goto out;
+
+	cmd_rsp = (struct can_rpmsg_rsp *)skb_rsp->data;
+	ret = le16_to_cpu(cmd_rsp->result);
+
+out:
+	mutex_unlock(&hub->curr_cmd.cmd_lock);
+	consume_skb(skb_rsp);
+
+	return ret;
+}
+
+static int can_rpmsg_cmd_down(struct can_rpmsg_hub *hub, u32 index)
+{
+	struct can_rpmsg_rsp *cmd_rsp;
+	struct can_rpmsg_cmd_down *cmd;
+	struct sk_buff *skb_rsp = NULL;
+	struct sk_buff *skb_cmd;
+	int ret = 0;
+
+	skb_cmd = can_rpmsg_cmd_alloc(CAN_RPMSG_CMD_DOWN, sizeof(*cmd));
+	if (!skb_cmd)
+		return -ENOMEM;
+
+	mutex_lock(&hub->curr_cmd.cmd_lock);
+
+	cmd = (struct can_rpmsg_cmd_down *)skb_cmd->data;
+
+	cmd->index = cpu_to_le32(index);
+
+	ret = can_rpmsg_cmd_send(hub, skb_cmd, &skb_rsp, sizeof(*cmd_rsp));
+	if (ret)
+		goto out;
+
+	cmd_rsp = (struct can_rpmsg_rsp *)skb_rsp->data;
+	ret = le16_to_cpu(cmd_rsp->result);
+
+out:
+	mutex_unlock(&hub->curr_cmd.cmd_lock);
+	consume_skb(skb_rsp);
+
+	return ret;
+}
+
 /* fw assumption:
  * - dst: general remote addr
  * - dst + index + 1: per-device addr
@@ -489,11 +553,21 @@ out:
 
 static int can_rpmsg_netdev_open(struct net_device *netdev)
 {
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(netdev);
+	struct can_rpmsg_hub *hub = priv->hub;
+	struct device *dev = &hub->rpdev->dev;
+	u32 index = priv->index;
 	int ret;
 
 	ret = open_candev(netdev);
 	if (ret)
 		return ret;
+
+	ret = can_rpmsg_cmd_up(hub, index);
+	if (ret) {
+		dev_err(dev, "failed to start candev %d: %d\n", index, ret);
+		return ret;
+	}
 
 	netif_start_queue(netdev);
 
@@ -502,10 +576,21 @@ static int can_rpmsg_netdev_open(struct net_device *netdev)
 
 static int can_rpmsg_netdev_close(struct net_device *netdev)
 {
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(netdev);
+	struct can_rpmsg_hub *hub = priv->hub;
+	struct device *dev = &hub->rpdev->dev;
+	u32 index = priv->index;
+	int ret;
+
 	netif_stop_queue(netdev);
+
+	ret = can_rpmsg_cmd_down(hub, index);
+	if (ret)
+		dev_err(dev, "failed to stop candev %d: %d\n", index, ret);
+
 	close_candev(netdev);
 
-	return 0;
+	return ret;
 }
 
 static const struct net_device_ops can_rpmsg_netdev_ops = {

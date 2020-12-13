@@ -33,6 +33,8 @@ enum can_rpmsg_ctrl_type {
 
 enum can_rpmsg_cmd_type {
 	CAN_RPMSG_CMD_INIT	= 0x0001,
+	CAN_RPMSG_CMD_UP	= 0x0002,
+	CAN_RPMSG_CMD_DOWN	= 0x0003,
 };
 
 struct can_rpmsg_cmd {
@@ -63,3 +65,12 @@ struct can_rpmsg_cmd_init_rsp {
 	__le16 devnum;
 } __packed;
 
+struct can_rpmsg_cmd_up {
+	struct can_rpmsg_cmd hdr;
+	__le32 index;
+} __packed;
+
+struct can_rpmsg_cmd_down {
+	struct can_rpmsg_cmd hdr;
+	__le32 index;
+} __packed;
