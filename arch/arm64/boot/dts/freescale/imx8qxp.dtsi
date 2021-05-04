@@ -308,9 +308,10 @@
 		 * - general interrupt1: remote proc finish re-init rpmsg stack
 		 *   when A core is partition reset.
 		 */
-		mbox-names = "tx", "rx", "rxdb";
+		mbox-names = "tx", "rx", "txdb", "rxdb";
 		mboxes = <&lsio_mu5 0 1
 			  &lsio_mu5 1 1
+			  &lsio_mu5 2 1
 			  &lsio_mu5 3 1>;
 		mub-partition = <3>;
 		status = "disabled";
