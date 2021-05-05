@@ -151,6 +151,7 @@
 			regulator-max-microvolt = <5000000>;
 			gpio = <&lsio_gpio0 13 GPIO_ACTIVE_HIGH>;
 			enable-active-high;
+			regulator-always-on;
 		};
 
 		/* Dummy regulator to keep PMIC powered via asserted MCA_IO9 */
@@ -333,7 +334,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_flexcan1>;
 	xceiver-supply = <&reg_5v_display>;
-	status = "okay";
+	status = "disabled";
 };
 
 /* CAN1 on expansion header */
@@ -342,7 +343,7 @@
 	pinctrl-0 = <&pinctrl_flexcan2>;
 	xceiver-supply = <&reg_5v_display>;
 	stby-gpios = <&lsio_gpio1 0 GPIO_ACTIVE_HIGH>;
-	status = "okay";
+	status = "disabled";
 };
 
 /*
@@ -357,7 +358,7 @@
 	xceiver-supply = <&reg_5v_display>;
 	stby-gpios = <&lsio_gpio1 2 GPIO_ACTIVE_HIGH>;
 	pinctrl-assert-gpios = <&lsio_gpio3 23 GPIO_ACTIVE_HIGH>;
-	status = "okay";
+	status = "disabled";
 };
 
 &cm40_intmux {
@@ -367,7 +368,7 @@
 &cm40_lpuart {
         pinctrl-names = "default";
         pinctrl-0 = <&pinctrl_cm40_lpuart>;
-        status = "okay";
+        status = "disabled";
 };
 
 /* LPSPI0 on expansion header */
