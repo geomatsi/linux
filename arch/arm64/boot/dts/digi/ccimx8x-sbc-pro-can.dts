@@ -72,6 +72,13 @@
                 status = "okay";
         };
 
+	/* fixed crystal dedicated to mcp2517fd */
+	mcp2517fd_osc: mcp2517fd_osc {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <40000000>;
+	};
+
 	regulators {
 		compatible = "simple-bus";
 		#address-cells = <1>;
@@ -373,11 +380,52 @@
 
 /* LPSPI0 on expansion header */
 &lpspi0 {
-	#address-cells = <1>;
-	#size-cells = <0>;
+	assigned-clock-rates = <60000000>;
+	fsl,spi-num-chipselects = <4>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_lpspi0>;
+	pinctrl-0 = <&pinctrl_lpspi0>,
+		    <&pinctrl_lpspi0_irq>;
+	cs-gpios = <&lsio_gpio1 8 GPIO_ACTIVE_LOW>,
+		   <&lsio_gpio1 7 GPIO_ACTIVE_LOW>,
+		   <&lsio_gpio4 20 GPIO_ACTIVE_LOW>,
+		   <&lsio_gpio4 19 GPIO_ACTIVE_LOW>;
 	status = "okay";
+
+	mcp2517fd0: mcp2517fd@0 {
+		reg = <0>;
+		compatible = "microchip,mcp2517fd";
+		spi-max-frequency = <10000000>;
+		interrupt-parent = <&lsio_gpio3>;
+		interrupts = <14 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&mcp2517fd_osc>;
+	};
+
+	mcp2517fd1: mcp2517fd@1 {
+		reg = <1>;
+		compatible = "microchip,mcp2517fd";
+		spi-max-frequency = <10000000>;
+		interrupt-parent = <&lsio_gpio3>;
+		interrupts = <15 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&mcp2517fd_osc>;
+	};
+
+	mcp2517fd2: mcp2517fd@2 {
+		reg = <2>;
+		compatible = "microchip,mcp2517fd";
+		spi-max-frequency = <10000000>;
+		interrupt-parent = <&lsio_gpio4>;
+		interrupts = <21 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&mcp2517fd_osc>;
+	};
+
+	mcp2517fd3: mcp2517fd@3 {
+		reg = <3>;
+		compatible = "microchip,mcp2517fd";
+		spi-max-frequency = <10000000>;
+		interrupt-parent = <&lsio_gpio0>;
+		interrupts = <12 IRQ_TYPE_LEVEL_LOW>;
+		clocks = <&mcp2517fd_osc>;
+	};
 };
 
 /* LPUART0 on expansion header */
@@ -573,20 +621,8 @@
 			 * want to use as GPIO (requires disabling the
 			 * driver that manages them).
 			 */
-			/* GPIO4_20 */
-			IMX8QXP_USDHC1_VSELECT_LSIO_GPIO4_IO20		0x06000020
-			/* GPIO4_21 */
-			IMX8QXP_USDHC1_WP_LSIO_GPIO4_IO21			0x06000020
 			/* SPI0_IRQ_N */
 			IMX8QXP_SPI2_SDO_LSIO_GPIO1_IO01			0x06000020
-			/* EXP_I2C_IRQ_N */
-			IMX8QXP_QSPI0A_SS1_B_LSIO_GPIO3_IO15		0x06000020
-			/* EXP_I2C_GPIO */
-			IMX8QXP_QSPI0A_SS0_B_LSIO_GPIO3_IO14		0x06000020
-			/* GPIO4_19 */
-			IMX8QXP_USDHC1_RESET_B_LSIO_GPIO4_IO19		0x06000020
-			/* GPIO0_12 */
-			IMX8QXP_SPDIF0_EXT_CLK_LSIO_GPIO0_IO12		0x06000020
 			/* GPIO5_09 */
 			IMX8QXP_ENET0_REFCLK_125M_25M_LSIO_GPIO5_IO09	0x06000020
 
@@ -626,11 +662,22 @@
 
 	pinctrl_lpspi0: lpspi0grp {
 		fsl,pins = <
-			IMX8QXP_SPI0_SCK_ADMA_SPI0_SCK	0x0600004c
-			IMX8QXP_SPI0_SDO_ADMA_SPI0_SDO	0x0600004c
-			IMX8QXP_SPI0_SDI_ADMA_SPI0_SDI	0x0600004c
-			IMX8QXP_SPI0_CS0_ADMA_SPI0_CS0	0x0600004c
-			IMX8QXP_SPI0_CS1_ADMA_SPI0_CS1	0x0600004c
+			IMX8QXP_SPI0_SCK_ADMA_SPI0_SCK		0x0600004c
+			IMX8QXP_SPI0_SDO_ADMA_SPI0_SDO		0x0600004c
+			IMX8QXP_SPI0_SDI_ADMA_SPI0_SDI		0x0600004c
+			IMX8QXP_SPI0_CS0_LSIO_GPIO1_IO08	0x06000020
+			IMX8QXP_SPI0_CS1_LSIO_GPIO1_IO07	0x06000020
+			IMX8QXP_USDHC1_RESET_B_LSIO_GPIO4_IO19	0x06000020
+			IMX8QXP_USDHC1_VSELECT_LSIO_GPIO4_IO20	0x06000020
+		>;
+	};
+
+	pinctrl_lpspi0_irq: lpspi0int {
+		fsl,pins = <
+			IMX8QXP_QSPI0A_SS0_B_LSIO_GPIO3_IO14	0x06000020
+			IMX8QXP_QSPI0A_SS1_B_LSIO_GPIO3_IO15	0x06000020
+			IMX8QXP_SPDIF0_EXT_CLK_LSIO_GPIO0_IO12	0x06000020
+			IMX8QXP_USDHC1_WP_LSIO_GPIO4_IO21	0x06000020
 		>;
 	};
 
