@@ -7,7 +7,7 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 
-#define CAN_RPMSG_MAJOR_VER	0
+#define CAN_RPMSG_MAJOR_VER	1
 #define CAN_RPMSG_MINOR_VER	1
 
 struct can_rpmsg_ctrl_hdr {
@@ -35,6 +35,7 @@ enum can_rpmsg_cmd_type {
 	CAN_RPMSG_CMD_INIT	= 0x0001,
 	CAN_RPMSG_CMD_UP	= 0x0002,
 	CAN_RPMSG_CMD_DOWN	= 0x0003,
+	CAN_RPMSG_CMD_GET_CFG	= 0x0004,
 };
 
 struct can_rpmsg_cmd {
@@ -61,7 +62,6 @@ struct can_rpmsg_cmd_init_rsp {
 	struct can_rpmsg_rsp hdr;
 	__le16 major;
 	__le16 minor;
-	__le32 bitrate;
 	__le16 devnum;
 } __packed;
 
@@ -73,4 +73,17 @@ struct can_rpmsg_cmd_up {
 struct can_rpmsg_cmd_down {
 	struct can_rpmsg_cmd hdr;
 	__le32 index;
+} __packed;
+
+struct can_rpmsg_cmd_get_cfg {
+	struct can_rpmsg_cmd hdr;
+	__le32 index;
+} __packed;
+
+struct can_rpmsg_cmd_get_cfg_rsp {
+	struct can_rpmsg_rsp hdr;
+	__le32 index;
+	__le32 bitrate;
+	__le32 dbitrate;
+	u8 canfd;
 } __packed;

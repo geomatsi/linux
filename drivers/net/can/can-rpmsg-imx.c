@@ -44,7 +44,6 @@ struct can_rpmsg_hub {
 struct can_rpmsg_netdev_priv {
 	struct can_priv can;
 	struct can_rpmsg_hub *hub;
-	int is_canfd;
 	int index;
 };
 
@@ -179,8 +178,8 @@ out:
 	return ret;
 }
 
-static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub, u16 *devnum,
-			      u16 *major, u16 *minor, u32 *bitrate)
+static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub,
+			      u16 *devnum, u16 *major, u16 *minor)
 {
 	struct can_rpmsg_cmd_init_rsp *cmd_rsp;
 	struct can_rpmsg_cmd_init *cmd;
@@ -208,7 +207,6 @@ static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub, u16 *devnum,
 	if (ret)
 		goto out;
 
-	*bitrate = le32_to_cpu(cmd_rsp->bitrate);
 	*devnum = le16_to_cpu(cmd_rsp->devnum);
 	*major = le16_to_cpu(cmd_rsp->major);
 	*minor = le16_to_cpu(cmd_rsp->minor);
@@ -276,6 +274,50 @@ static int can_rpmsg_cmd_down(struct can_rpmsg_hub *hub, u32 index)
 
 	cmd_rsp = (struct can_rpmsg_rsp *)skb_rsp->data;
 	ret = le16_to_cpu(cmd_rsp->result);
+
+out:
+	mutex_unlock(&hub->curr_cmd.cmd_lock);
+	consume_skb(skb_rsp);
+
+	return ret;
+}
+
+static int can_rpmsg_cmd_get_cfg(struct can_rpmsg_hub *hub, u32 index,
+				 struct can_priv *can)
+{
+	struct can_rpmsg_cmd_get_cfg_rsp *cmd_rsp;
+	struct can_rpmsg_cmd_get_cfg *cmd;
+	struct sk_buff *skb_rsp = NULL;
+	struct sk_buff *skb_cmd;
+	int ret = 0;
+
+	skb_cmd = can_rpmsg_cmd_alloc(CAN_RPMSG_CMD_GET_CFG, sizeof(*cmd));
+	if (!skb_cmd)
+		return -ENOMEM;
+
+	mutex_lock(&hub->curr_cmd.cmd_lock);
+
+	cmd = (struct can_rpmsg_cmd_get_cfg *)skb_cmd->data;
+
+	cmd->index = cpu_to_le32(index);
+
+	ret = can_rpmsg_cmd_send(hub, skb_cmd, &skb_rsp, sizeof(*cmd_rsp));
+	if (ret)
+		goto out;
+
+	cmd_rsp = (struct can_rpmsg_cmd_get_cfg_rsp *)skb_rsp->data;
+	ret = le16_to_cpu(cmd_rsp->hdr.result);
+	if (ret)
+		goto out;
+
+	can->ctrlmode_supported =
+		CAN_CTRLMODE_3_SAMPLES | CAN_CTRLMODE_LISTENONLY;
+	can->bittiming.bitrate = le32_to_cpu(cmd_rsp->bitrate);
+
+	if (cmd_rsp->canfd) {
+		can->data_bittiming.bitrate = le32_to_cpu(cmd_rsp->dbitrate);
+		can->ctrlmode_supported |= CAN_CTRLMODE_FD;
+	}
 
 out:
 	mutex_unlock(&hub->curr_cmd.cmd_lock);
@@ -431,23 +473,25 @@ static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
 	}
 
 	priv = netdev_priv(netdev);
-	if (priv->is_canfd)
+	switch (len) {
+	case CANFD_MTU:
 		skb = alloc_canfd_skb(netdev, &cfd);
-	else
+		break;
+	case CAN_MTU:
 		skb = alloc_can_skb(netdev, (struct can_frame **)&cfd);
+		break;
+	default:
+		dev_err(dev, "unexpected frame length: %d instead of %d\n",
+			len, skb->len);
+		netdev->stats.rx_dropped += 1;
+		ret = -EINVAL;
+		goto err_recv;
+	}
 
 	if (!skb) {
 		dev_err(dev, "alloc_can_skb failed for can %d\n", priv->index);
 		netdev->stats.rx_dropped += 1;
 		ret = -ENOMEM;
-		goto err_recv;
-	}
-
-	if (skb->len < len) {
-		dev_err(dev, "unexpected frame length: %d instead of %d\n",
-			len, skb->len);
-		netdev->stats.rx_dropped += 1;
-		ret = -EINVAL;
 		goto err_recv;
 	}
 
@@ -597,14 +641,15 @@ static const struct net_device_ops can_rpmsg_netdev_ops = {
 		.ndo_open = can_rpmsg_netdev_open,
 		.ndo_stop = can_rpmsg_netdev_close,
 		.ndo_start_xmit = can_rpmsg_netdev_start_xmit,
+		.ndo_change_mtu = can_change_mtu,
 };
 
-static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub,
-					   u32 bitrate)
+static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
 {
 	struct device *dev = &hub->rpdev->dev;
 	struct can_rpmsg_netdev_priv *priv;
 	struct net_device *netdev;
+	int ret;
 
 	dev_info(dev, "create can device %d", hub->devnum);
 
@@ -627,9 +672,13 @@ static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub,
 	netdev->netdev_ops = &can_rpmsg_netdev_ops;
 	SET_NETDEV_DEV(netdev, dev);
 
-	priv->can.ctrlmode_supported =
-		CAN_CTRLMODE_3_SAMPLES | CAN_CTRLMODE_LISTENONLY;
-	priv->can.bittiming.bitrate = bitrate;
+	ret = can_rpmsg_cmd_get_cfg(hub, priv->index, &priv->can);
+	if (ret) {
+		dev_err(dev, "failed to get can%d settings: %d\n",
+			hub->devnum, ret);
+		free_candev(netdev);
+		return ERR_PTR(-EINVAL);
+	}
 
 	return netdev;
 }
@@ -639,7 +688,6 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 	struct device *dev = &rpdev->dev;
 	struct can_rpmsg_hub *hub;
 	struct net_device *netdev;
-	u32 bitrate;
 	u16 devnum;
 	u16 major;
 	u16 minor;
@@ -669,7 +717,7 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 	dev_set_drvdata(dev, hub);
 	hub->rpdev = rpdev;
 
-	ret = can_rpmsg_cmd_init(hub, &devnum, &major, &minor, &bitrate);
+	ret = can_rpmsg_cmd_init(hub, &devnum, &major, &minor);
 	if (ret) {
 		dev_err(&rpdev->dev, "failed to init fw: %d\n", ret);
 		return -EINVAL;
@@ -693,7 +741,7 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 			 major, minor);
 
 	for (i = 0; i < devnum; i++) {
-		netdev = rpmsg_add_candev(hub, bitrate);
+		netdev = rpmsg_add_candev(hub);
 		if (IS_ERR(netdev)) {
 			dev_err(dev, "Failed to add CAN device: %ld",
 				PTR_ERR(netdev));
