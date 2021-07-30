@@ -67,28 +67,25 @@ static struct sk_buff *can_rpmsg_cmd_alloc(u16 cmd_no, size_t cmd_size)
 }
 
 static int can_rpmsg_cmd_check_reply(struct can_rpmsg_hub *hub,
-				     struct sk_buff *skb_cmd,
+				     u16 cmd_id,
 				     struct sk_buff *skb_resp,
 				     size_t resp_size)
 {
 	struct rpmsg_device *rpdev = hub->rpdev;
 	struct device *dev = &rpdev->dev;
 	struct can_rpmsg_rsp *cmd_rsp;
-	struct can_rpmsg_cmd *cmd;
 
 	cmd_rsp = (struct can_rpmsg_rsp *)skb_resp->data;
-	cmd = (struct can_rpmsg_cmd *)skb_cmd->data;
 
-	if (le16_to_cpu(cmd_rsp->id) != le16_to_cpu(cmd->id)) {
+	if (le16_to_cpu(cmd_rsp->id) != cmd_id) {
 		dev_warn(dev, "CMD 0x%x: bad cmd ID in response: 0x%x\n",
-			 le16_to_cpu(cmd->id), le16_to_cpu(cmd_rsp->id));
+			 cmd_id, le16_to_cpu(cmd_rsp->id));
 		return -EINVAL;
 	}
 
 	if (unlikely(le16_to_cpu(cmd_rsp->hdr.len) < resp_size)) {
 		dev_warn(dev, "CMD 0x%x: bad response size %u < %zu\n",
-			 le16_to_cpu(cmd->id), le16_to_cpu(cmd_rsp->hdr.len),
-			 resp_size);
+			 cmd_id, le16_to_cpu(cmd_rsp->hdr.len), resp_size);
 		return -ENOSPC;
 	}
 
@@ -103,6 +100,7 @@ static int can_rpmsg_cmd_send(struct can_rpmsg_hub *hub,
 	struct can_rpmsg_cmd_state *state = &hub->curr_cmd;
 	struct can_rpmsg_cmd *cmd = (void *)skb_cmd->data;
 	struct rpmsg_device *rpdev = hub->rpdev;
+	u16 cmd_id = le16_to_cpu(cmd->id);
 	struct device *dev = &rpdev->dev;
 	struct sk_buff *response = NULL;
 	bool resp_not_handled = true;
@@ -162,7 +160,7 @@ static int can_rpmsg_cmd_send(struct can_rpmsg_hub *hub,
 		goto out;
 	}
 
-	ret = can_rpmsg_cmd_check_reply(hub, skb_cmd, response, size_rsp);
+	ret = can_rpmsg_cmd_check_reply(hub, cmd_id, response, size_rsp);
 	if (ret) {
 		dev_kfree_skb(response);
 		goto out;
