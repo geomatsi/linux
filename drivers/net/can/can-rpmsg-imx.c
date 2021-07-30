@@ -674,6 +674,7 @@ static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
 	if (ret) {
 		dev_err(dev, "failed to get can%d settings: %d\n",
 			hub->devnum, ret);
+		hub->netdev[priv->index] = NULL;
 		free_candev(netdev);
 		return ERR_PTR(-EINVAL);
 	}
