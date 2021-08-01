@@ -273,9 +273,20 @@
 		};
 	};
 
+	plat_can_rpmsg: plat-can-rpmsg {
+		compatible = "fsl,plat-can-rpmsg";
+		mbox-names = "ctx", "crx";
+		mboxes = <&lsio_mu13 0 1
+			  &lsio_mu13 1 1>;
+		status = "okay";
+	};
 };
 
-&rpmsg{
+&lsio_mu13 {
+	status = "okay";
+};
+
+&rpmsg {
 	status = "disabled";
 };
 

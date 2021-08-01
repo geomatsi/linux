@@ -5,6 +5,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/mailbox_client.h>
 #include <linux/module.h>
 #include <linux/rpmsg.h>
 #include <linux/errno.h>
@@ -12,6 +13,7 @@
 #include <linux/netdevice.h>
 #include <linux/can/dev.h>
 #include <linux/can.h>
+#include <linux/platform_device.h>
 
 #include "can-rpmsg-ipc.h"
 
@@ -30,8 +32,11 @@ struct can_rpmsg_cmd_state {
 	spinlock_t rsp_lock; /* lock for resp_skb & waiting_for_resp changes */
 };
 
+struct imx_oob_cm_ipc;
+
 struct can_rpmsg_hub {
 	struct rpmsg_device *rpdev;
+	struct imx_oob_cm_ipc *ctrl;
 	struct net_device *netdev[CAN_RPMSG_MAXDEV];
 	struct work_struct tx_wq;
 	struct sk_buff_head txq;
@@ -46,6 +51,26 @@ struct can_rpmsg_netdev_priv {
 	struct can_rpmsg_hub *hub;
 	int index;
 };
+
+struct imx_oob_cm_ipc {
+       struct mbox_client cl;
+       struct mbox_chan *tx;
+       struct mbox_chan *rx;
+       struct can_rpmsg_hub *hub;
+       struct device *dev;
+};
+
+static struct imx_oob_cm_ipc *oob_ipc_handle;
+
+static int imx_oob_ipc_get_handle(struct imx_oob_cm_ipc **ipc)
+{
+       if (!oob_ipc_handle)
+               return -EPROBE_DEFER;
+
+       *ipc = oob_ipc_handle;
+
+       return 0;
+}
 
 static struct sk_buff *can_rpmsg_cmd_alloc(u16 cmd_no, size_t cmd_size)
 {
@@ -382,6 +407,15 @@ out_err:
 	dev_kfree_skb_any(skb);
 }
 
+static void imx_oob_handle_rx(struct mbox_client *c, void *msg)
+{
+	struct imx_oob_cm_ipc *ipc = container_of(c, struct imx_oob_cm_ipc, cl);
+	struct can_rpmsg_hub *hub = ipc->hub;
+	u32 data;
+
+	dev_warn(ipc->dev, "mbox recv: %u\n", *(u32 *)msg);
+}
+
 static int can_rpmsg_rx_ctrl_handler(struct can_rpmsg_hub *hub,
 				     struct sk_buff *skb)
 {
@@ -699,6 +733,13 @@ static int can_rpmsg_probe(struct rpmsg_device *rpdev)
 	if (!hub)
 		return -ENOMEM;
 
+	ret = imx_oob_ipc_get_handle(&hub->ctrl);
+	if (ret)
+		return ret;
+
+	hub->ctrl->cl.rx_callback = imx_oob_handle_rx;
+	hub->ctrl->hub = hub;
+
 	init_completion(&hub->curr_cmd.cmd_completion);
 	spin_lock_init(&hub->curr_cmd.rsp_lock);
 	mutex_init(&hub->curr_cmd.cmd_lock);
@@ -801,16 +842,103 @@ static struct rpmsg_device_id can_rpmsg_id_table[] = {
 	{ .name	= "can-rpmsg-imx" },
 	{ },
 };
-MODULE_DEVICE_TABLE(rpmsg, can_rpmsg_id_table);
 
 static struct rpmsg_driver can_rpmsg_driver = {
-	.drv.name	= KBUILD_MODNAME,
+	.drv.name	= "can_rpmsg",
+	.drv.owner	= THIS_MODULE,
 	.id_table	= can_rpmsg_id_table,
 	.probe		= can_rpmsg_probe,
 	.callback	= can_rpmsg_cb,
 	.remove		= can_rpmsg_remove,
 };
-module_rpmsg_driver(can_rpmsg_driver);
+
+static int plat_can_rpmsg_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct imx_oob_cm_ipc *ipc;
+	struct mbox_client *cl;
+	int ret = 0;
+
+	ipc = devm_kzalloc(&pdev->dev, sizeof(*ipc), GFP_KERNEL);
+	if (!ipc)
+		return -ENOMEM;
+
+	ipc->dev = dev;
+	dev_set_drvdata(dev, ipc);
+
+	cl = &ipc->cl;
+
+	/* mailbox client configuration */
+	cl->dev = dev;
+	cl->tx_block = false;
+	cl->knows_txdone = true;
+
+	/* postpone rx_callback init */
+	cl->rx_callback = NULL;
+
+	ipc->tx = mbox_request_channel_byname(cl, "ctx");
+	if (IS_ERR(ipc->tx)) {
+		ret = PTR_ERR(ipc->tx);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "failed to request tx chan: %d\n", ret);
+		ipc->tx = NULL;
+		goto out;
+	}
+
+	ipc->rx = mbox_request_channel_byname(cl, "crx");
+	if (IS_ERR(ipc->rx)) {
+		ret = PTR_ERR(ipc->rx);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "failed to request rx chan: %d\n", ret);
+		ipc->rx = NULL;
+		goto out;
+	}
+
+	oob_ipc_handle = ipc;
+
+	ret = register_rpmsg_driver(&can_rpmsg_driver);
+	if (ret) {
+		dev_err(dev, "failed to register can rpmsg driver: %d\n", ret);
+		goto out;
+	}
+
+	return 0;
+out:
+	mbox_free_channel(ipc->tx);
+	mbox_free_channel(ipc->rx);
+
+	return ret;
+}
+
+static int plat_can_rpmsg_remove(struct platform_device *pdev)
+{
+	struct imx_oob_cm_ipc *ipc;
+
+	ipc = dev_get_drvdata(&pdev->dev);
+
+	unregister_rpmsg_driver(&can_rpmsg_driver);
+
+	mbox_free_channel(ipc->tx);
+	mbox_free_channel(ipc->rx);
+
+	return 0;
+}
+
+static const struct of_device_id plat_can_rpmsg_dt_ids[] = {
+	{ .compatible = "fsl,plat-can-rpmsg", },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, plat_can_rpmsg_dt_ids);
+
+static struct platform_driver plat_can_rpmsg_driver = {
+	.driver	= {
+		.name	= "plat_can_rpmsg",
+		.of_match_table = plat_can_rpmsg_dt_ids,
+	},
+	.probe	= plat_can_rpmsg_probe,
+	.remove	= plat_can_rpmsg_remove,
+};
+module_platform_driver(plat_can_rpmsg_driver);
 
 MODULE_DESCRIPTION("Remote processor CAN driver");
 MODULE_LICENSE("GPL v2");
