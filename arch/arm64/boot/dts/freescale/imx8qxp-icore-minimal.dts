@@ -51,6 +51,18 @@
 			reg = <0 0x90010000 0 0x40000>;
 			no-map;
 		};
+
+		ctrl_req: ctrl_req {
+			compatible = "shared-dma-pool";
+			reg = <0 0x90050000 0 0x200>;
+			no-map;
+		};
+
+		ctrl_rsp: ctrl_rsp {
+			compatible = "shared-dma-pool";
+			reg = <0 0x90050200 0 0x200>;
+			no-map;
+		};
 	};
 
 	imx8x_cm4: imx8x_cm4@0 {
@@ -79,6 +91,7 @@
 
 	plat_can_rpmsg: plat-can-rpmsg {
 		compatible = "fsl,plat-can-rpmsg";
+		memory-region = <&ctrl_req>, <&ctrl_rsp>;
 		mbox-names = "ctx", "crx";
 		mboxes = <&lsio_mu13 0 1
 			  &lsio_mu13 1 1>;

@@ -14,6 +14,9 @@
 #include <linux/can/dev.h>
 #include <linux/can.h>
 #include <linux/platform_device.h>
+#include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/of_reserved_mem.h>
 
 #include "can-rpmsg-ipc.h"
 
@@ -53,11 +56,15 @@ struct can_rpmsg_netdev_priv {
 };
 
 struct imx_oob_cm_ipc {
-       struct mbox_client cl;
-       struct mbox_chan *tx;
-       struct mbox_chan *rx;
-       struct can_rpmsg_hub *hub;
-       struct device *dev;
+	struct mbox_client cl;
+	struct mbox_chan *tx;
+	struct mbox_chan *rx;
+	void *mem_req;
+	size_t req_size;
+	void *mem_rsp;
+	size_t rsp_size;
+	struct can_rpmsg_hub *hub;
+	struct device *dev;
 };
 
 static struct imx_oob_cm_ipc *oob_ipc_handle;
@@ -855,7 +862,9 @@ static struct rpmsg_driver can_rpmsg_driver = {
 static int plat_can_rpmsg_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct of_phandle_iterator it;
 	struct imx_oob_cm_ipc *ipc;
+	struct reserved_mem *rmem;
 	struct mbox_client *cl;
 	int ret = 0;
 
@@ -876,6 +885,8 @@ static int plat_can_rpmsg_probe(struct platform_device *pdev)
 	/* postpone rx_callback init */
 	cl->rx_callback = NULL;
 
+	/* control path signaling */
+
 	ipc->tx = mbox_request_channel_byname(cl, "ctx");
 	if (IS_ERR(ipc->tx)) {
 		ret = PTR_ERR(ipc->tx);
@@ -894,6 +905,56 @@ static int plat_can_rpmsg_probe(struct platform_device *pdev)
 		goto out;
 	}
 
+	/* control path shared buffers */
+
+	of_phandle_iterator_init(&it, dev->of_node, "memory-region", NULL, 0);
+	while (of_phandle_iterator_next(&it) == 0) {
+		rmem = of_reserved_mem_lookup(it.node);
+		if (!rmem) {
+			dev_err(dev, "unable to acquire memory-region\n");
+			ret = -EINVAL;
+			goto out;
+		}
+
+		if (!strcmp(it.node->name, "ctrl_req")) {
+			ipc->req_size = rmem->size;
+			ipc->mem_req = devm_ioremap_nocache(dev, rmem->base,
+							    rmem->size);
+			if (!ipc->mem_req) {
+				dev_err(dev, "failed to map memory region\n");
+				ret = -EBUSY;
+				goto out;
+			}
+		}
+
+		if (!strcmp(it.node->name, "ctrl_rsp")) {
+			ipc->rsp_size = rmem->size;
+			ipc->mem_rsp = devm_ioremap_nocache(dev, rmem->base,
+							    rmem->size);
+			if (!ipc->mem_rsp) {
+				dev_err(dev, "failed to map memory region\n");
+				ret = -EBUSY;
+				goto out;
+			}
+		}
+	}
+
+	if (!ipc->mem_req) {
+		dev_err(dev, "failed to find 'ctrl_req' memory region\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	if (!ipc->mem_rsp) {
+		dev_err(dev, "failed to find 'ctrl_rsp' memory region\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	dev_info(dev, "control path request buffer: start 0x%p size %zu\n",
+		 ipc->mem_req, ipc->req_size);
+	dev_info(dev, "control path response buffer: start 0x%p size %zu\n",
+		 ipc->mem_rsp, ipc->rsp_size);
 	oob_ipc_handle = ipc;
 
 	ret = register_rpmsg_driver(&can_rpmsg_driver);
