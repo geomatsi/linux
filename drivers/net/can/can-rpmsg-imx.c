@@ -79,6 +79,33 @@ static int imx_oob_ipc_get_handle(struct imx_oob_cm_ipc **ipc)
        return 0;
 }
 
+static int can_rpmsg_ctrl_send(struct can_rpmsg_hub *hub,
+			       struct sk_buff *skb_cmd)
+{
+	struct rpmsg_device *rpdev = hub->rpdev;
+	struct device *dev = &rpdev->dev;
+	int ret;
+	u32 msg;
+
+	if (skb_cmd->len > hub->ctrl->req_size) {
+		dev_err(dev, "cmd is too long: %u > %zu\n",
+			skb_cmd->len, hub->ctrl->req_size);
+		return -ENOMEM;
+	}
+
+	memcpy(hub->ctrl->mem_req, skb_cmd->data, skb_cmd->len);
+	msg = can_rpmsg_to_sig(CAN_RPMSG_CTRL_CMD, skb_cmd->len);
+	wmb();
+
+	ret = mbox_send_message(hub->ctrl->tx, (void *)&msg);
+	if (ret < 0) {
+		dev_err(dev, "failed to send signal: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
 static struct sk_buff *can_rpmsg_cmd_alloc(u16 cmd_no, size_t cmd_size)
 {
 	struct can_rpmsg_cmd *cmd;
@@ -151,7 +178,7 @@ static int can_rpmsg_cmd_send(struct can_rpmsg_hub *hub,
 	state->waiting_for_rsp = true;
 	spin_unlock(&state->rsp_lock);
 
-	ret = rpmsg_send(rpdev->ept, skb_cmd->data, skb_cmd->len);
+	ret = can_rpmsg_ctrl_send(hub, skb_cmd);
 	dev_kfree_skb(skb_cmd);
 
 	if (unlikely(ret))
@@ -227,6 +254,7 @@ static int can_rpmsg_cmd_init(struct can_rpmsg_hub *hub,
 
 	cmd->major = cpu_to_le16(CAN_RPMSG_MAJOR_VER);
 	cmd->minor = cpu_to_le16(CAN_RPMSG_MINOR_VER);
+	cmd->addr = cpu_to_le16(hub->rpdev->src);
 
 	ret = can_rpmsg_cmd_send(hub, skb_cmd, &skb_rsp, sizeof(*cmd_rsp));
 	if (ret)
@@ -357,8 +385,7 @@ out:
 }
 
 /* fw assumption:
- * - dst: general remote addr
- * - dst + index + 1: per-device addr
+ * - dst + index: per-device addr
  */
 static inline int net2addr(struct net_device *ndev)
 {
@@ -366,12 +393,12 @@ static inline int net2addr(struct net_device *ndev)
 	struct can_rpmsg_hub *hub = priv->hub;
 	int index = priv->index;
 
-	return (hub->rpdev->dst + index + 1);
+	return (hub->rpdev->dst + index);
 }
 
 static inline struct net_device *addr2net(struct can_rpmsg_hub *hub, int addr)
 {
-	int index = addr - hub->rpdev->dst - 1;
+	int index = addr - hub->rpdev->dst;
 
 	if (index < 0 || index > hub->devnum)
 		return NULL;
@@ -412,15 +439,6 @@ static void can_rpmsg_cmd_rsp(struct can_rpmsg_hub *hub, struct sk_buff *skb)
 out_err:
 	spin_unlock(&state->rsp_lock);
 	dev_kfree_skb_any(skb);
-}
-
-static void imx_oob_handle_rx(struct mbox_client *c, void *msg)
-{
-	struct imx_oob_cm_ipc *ipc = container_of(c, struct imx_oob_cm_ipc, cl);
-	struct can_rpmsg_hub *hub = ipc->hub;
-	u32 data;
-
-	dev_warn(ipc->dev, "mbox recv: %u\n", *(u32 *)msg);
 }
 
 static int can_rpmsg_rx_ctrl_handler(struct can_rpmsg_hub *hub,
@@ -474,6 +492,37 @@ static int can_rpmsg_rx_ctrl_handler(struct can_rpmsg_hub *hub,
 	return ret;
 }
 
+static void imx_oob_handle_rx(struct mbox_client *c, void *msg)
+{
+	struct imx_oob_cm_ipc *ipc = container_of(c, struct imx_oob_cm_ipc, cl);
+	struct can_rpmsg_hub *hub = ipc->hub;
+	struct rpmsg_device *rpdev = hub->rpdev;
+	struct device *dev = &rpdev->dev;
+	u32 signal = *(u32 *)msg;
+	struct sk_buff *skb;
+	size_t len;
+	u32 type;
+
+	can_rpmsg_from_sig(signal, &type, &len);
+	dev_dbg(dev, "ctrl signal: type %u len %zu\n", type, len);
+
+	switch (type) {
+	case CAN_RPMSG_CTRL_RSP:
+		skb = __dev_alloc_skb(len, GFP_ATOMIC);
+		if (unlikely(!skb)) {
+			dev_err(dev, "failed to allocate ctrl skb\n");
+			return;
+		}
+
+		memcpy(skb_put(skb, len), hub->ctrl->mem_rsp, len);
+		can_rpmsg_rx_ctrl_handler(hub, skb);
+		break;
+	default:
+		dev_warn(dev, "unknown ctrl type: 0x%x\n", type);
+		break;
+	}
+}
+
 static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
 			void *rpmsg_priv, u32 src)
 {
@@ -488,20 +537,6 @@ static int can_rpmsg_cb(struct rpmsg_device *rpdev, void *data, int len,
 	int ret = 0;
 
 	dev_dbg(dev, "can frame from src(0x%x): len %d\n", src, len);
-
-	/* fw: src + 0: control path */
-
-	if (src == hub->rpdev->dst) {
-		skb = __dev_alloc_skb(len, GFP_KERNEL);
-		if (unlikely(!skb)) {
-			dev_err(dev, "failed to allocate ctrl skb\n");
-			return -ENOMEM;
-		}
-
-		memcpy(skb_put(skb, len), data, len);
-		can_rpmsg_rx_ctrl_handler(hub, skb);
-		return 0;
-	}
 
 	/* fw: src + X: canX data path */
 
@@ -705,7 +740,7 @@ static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
 	priv->hub = hub;
 	priv->index = hub->devnum;
 
-	hub->netdev[hub->devnum] = netdev;
+	hub->netdev[priv->index] = netdev;
 	hub->devnum += 1;
 
 	netdev->netdev_ops = &can_rpmsg_netdev_ops;
@@ -714,7 +749,7 @@ static struct net_device *rpmsg_add_candev(struct can_rpmsg_hub *hub)
 	ret = can_rpmsg_cmd_get_cfg(hub, priv->index, &priv->can);
 	if (ret) {
 		dev_err(dev, "failed to get can%d settings: %d\n",
-			hub->devnum, ret);
+			priv->index, ret);
 		hub->netdev[priv->index] = NULL;
 		free_candev(netdev);
 		return ERR_PTR(-EINVAL);

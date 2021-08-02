@@ -4,11 +4,16 @@
  *
  */
 
+#ifndef __CAN_RPMSG_IPC__
+#define __CAN_RPMSG_IPC__
+
 #include <linux/kernel.h>
 #include <linux/errno.h>
 
 #define CAN_RPMSG_MAJOR_VER	1
 #define CAN_RPMSG_MINOR_VER	1
+
+/* control msg header */
 
 struct can_rpmsg_ctrl_hdr {
 	__le16 type;
@@ -56,6 +61,7 @@ struct can_rpmsg_cmd_init {
 	struct can_rpmsg_cmd hdr;
 	__le16 major;
 	__le16 minor;
+	__le16 addr;
 } __packed;
 
 struct can_rpmsg_cmd_init_rsp {
@@ -87,3 +93,18 @@ struct can_rpmsg_cmd_get_cfg_rsp {
 	__le32 dbitrate;
 	u8 canfd;
 } __packed;
+
+/* control path */
+
+static inline u32 can_rpmsg_to_sig(enum can_rpmsg_ctrl_type type, size_t size)
+{
+	return ((size << 16) | type);
+}
+
+static inline void can_rpmsg_from_sig(u32 signal, u32 *type, size_t *size)
+{
+	*type = signal & 0xffff;
+	*size = (signal >> 16) & 0xffff;
+}
+
+#endif /* __CAN_RPMSG_IPC__ */
