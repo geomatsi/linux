@@ -413,7 +413,7 @@
 		   <&lsio_gpio1 7 GPIO_ACTIVE_LOW>,
 		   <&lsio_gpio4 20 GPIO_ACTIVE_LOW>,
 		   <&lsio_gpio4 19 GPIO_ACTIVE_LOW>;
-	status = "okay";
+	status = "disabled";
 
 	mcp2517fd0: mcp2517fd@0 {
 		reg = <0>;
