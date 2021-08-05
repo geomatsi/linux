@@ -101,8 +101,20 @@ struct can_rpmsg_cmd_get_cfg_rsp {
 	__le32 index;
 	__le32 bitrate;
 	__le32 dbitrate;
+	__le32 bitrate_mask;
+	__le32 dbitrate_mask;
 	u8 canfd;
 } __packed;
+
+enum can_rpmsg_bitrate {
+	CAN_RPMSG_125K		= BIT(0),
+	CAN_RPMSG_250K		= BIT(1),
+	CAN_RPMSG_500K		= BIT(2),
+	CAN_RPMSG_1000K		= BIT(3),
+	CAN_RPMSG_2000K		= BIT(4),
+	CAN_RPMSG_3000K		= BIT(5),
+	CAN_RPMSG_4000K		= BIT(6),
+};
 
 /* control path */
 

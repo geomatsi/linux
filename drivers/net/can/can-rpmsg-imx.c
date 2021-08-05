@@ -342,9 +342,57 @@ out:
 	return ret;
 }
 
+static void can_rpmsg_set_bitrate_list(u32 mask, unsigned int size, u32 *data)
+{
+	unsigned int n = 1;
+	int i;
+
+	for (i = 0; i < sizeof(mask) * 8; i++) {
+		if (!test_bit(i, (unsigned long *)&mask))
+			continue;
+
+		if (n > size) {
+			pr_warn("bitrate list is too short: %u\n", size);
+			return;
+		}
+
+		switch (BIT(i)) {
+		case CAN_RPMSG_125K:
+			*data = 125000;
+			break;
+		case CAN_RPMSG_250K:
+			*data = 250000;
+			break;
+		case CAN_RPMSG_500K:
+			*data = 500000;
+			break;
+		case CAN_RPMSG_1000K:
+			*data = 1000000;
+			break;
+		case CAN_RPMSG_2000K:
+			*data = 2000000;
+			break;
+		case CAN_RPMSG_3000K:
+			*data = 3000000;
+			break;
+		case CAN_RPMSG_4000K:
+			*data = 4000000;
+			break;
+		default:
+			pr_warn("unexpected bitrate mask bit: %d\n", i);
+			continue;
+		}
+
+		data += 1;
+		n += 1;
+	}
+}
+
 static int can_rpmsg_cmd_get_cfg(struct can_rpmsg_hub *hub, u32 index,
 				 struct can_priv *can)
 {
+	struct rpmsg_device *rpdev = hub->rpdev;
+	struct device *dev = &rpdev->dev;
 	struct can_rpmsg_cmd_get_cfg_rsp *cmd_rsp;
 	struct can_rpmsg_cmd_get_cfg *cmd;
 	struct sk_buff *skb_rsp = NULL;
@@ -374,9 +422,33 @@ static int can_rpmsg_cmd_get_cfg(struct can_rpmsg_hub *hub, u32 index,
 		CAN_CTRLMODE_3_SAMPLES | CAN_CTRLMODE_LISTENONLY;
 	can->bittiming.bitrate = le32_to_cpu(cmd_rsp->bitrate);
 
+	if (le32_to_cpu(cmd_rsp->bitrate_mask)) {
+		can->bitrate_const_cnt =
+			hweight_long(le32_to_cpu(cmd_rsp->bitrate_mask));
+		can->bitrate_const =
+			devm_kzalloc(dev,
+				     can->bitrate_const_cnt * sizeof(u32),
+				     GFP_KERNEL);
+		can_rpmsg_set_bitrate_list(le32_to_cpu(cmd_rsp->bitrate_mask),
+					   can->bitrate_const_cnt,
+					   (u32 *)can->bitrate_const);
+	}
+
 	if (cmd_rsp->canfd) {
-		can->data_bittiming.bitrate = le32_to_cpu(cmd_rsp->dbitrate);
 		can->ctrlmode_supported |= CAN_CTRLMODE_FD;
+		can->data_bittiming.bitrate = le32_to_cpu(cmd_rsp->dbitrate);
+	}
+
+	if (cmd_rsp->canfd && le32_to_cpu(cmd_rsp->dbitrate_mask)) {
+		can->data_bitrate_const_cnt =
+			hweight_long(le32_to_cpu(cmd_rsp->dbitrate_mask));
+		can->data_bitrate_const =
+			devm_kzalloc(dev,
+				     can->data_bitrate_const_cnt * sizeof(u32),
+				     GFP_KERNEL);
+		can_rpmsg_set_bitrate_list(le32_to_cpu(cmd_rsp->dbitrate_mask),
+					   can->data_bitrate_const_cnt,
+					   (u32 *)can->data_bitrate_const);
 	}
 
 out:
