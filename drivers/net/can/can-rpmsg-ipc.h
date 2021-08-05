@@ -51,6 +51,7 @@ enum can_rpmsg_cmd_type {
 	CAN_RPMSG_CMD_UP	= 0x0002,
 	CAN_RPMSG_CMD_DOWN	= 0x0003,
 	CAN_RPMSG_CMD_GET_CFG	= 0x0004,
+	CAN_RPMSG_CMD_SET_RATE	= 0x0005,
 };
 
 struct can_rpmsg_cmd {
@@ -115,6 +116,20 @@ enum can_rpmsg_bitrate {
 	CAN_RPMSG_3000K		= BIT(5),
 	CAN_RPMSG_4000K		= BIT(6),
 };
+
+struct can_rpmsg_cmd_set_rate {
+	struct can_rpmsg_cmd hdr;
+	__le32 index;
+	__le32 bitrate;
+	__le32 dbitrate;
+} __packed;
+
+struct can_rpmsg_cmd_set_rate_rsp {
+	struct can_rpmsg_rsp hdr;
+	__le32 index;
+	__le32 bitrate;
+	__le32 dbitrate;
+} __packed;
 
 /* control path */
 

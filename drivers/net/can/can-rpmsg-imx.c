@@ -342,6 +342,53 @@ out:
 	return ret;
 }
 
+static int can_rpmsg_set_bittiming(struct net_device *ndev)
+{
+	struct can_rpmsg_netdev_priv *priv = netdev_priv(ndev);
+	struct can_rpmsg_hub *hub = priv->hub;
+	struct device *dev = &hub->rpdev->dev;
+	struct can_rpmsg_cmd_set_rate_rsp *cmd_rsp;
+	struct can_rpmsg_cmd_set_rate *cmd;
+	struct sk_buff *skb_rsp = NULL;
+	struct sk_buff *skb_cmd;
+	u32 index = priv->index;
+	int ret;
+
+	dev_dbg(dev, "new bittime settings: bitrate(%u) dbitrate(%u)\n",
+		priv->can.bittiming.bitrate,
+		priv->can.data_bittiming.bitrate);
+
+	skb_cmd = can_rpmsg_cmd_alloc(CAN_RPMSG_CMD_SET_RATE, sizeof(*cmd));
+	if (!skb_cmd)
+		return -ENOMEM;
+
+	mutex_lock(&hub->curr_cmd.cmd_lock);
+
+	cmd = (struct can_rpmsg_cmd_set_rate *)skb_cmd->data;
+
+	cmd->index = cpu_to_le32(index);
+	cmd->bitrate = cpu_to_le32(priv->can.bittiming.bitrate);
+	cmd->dbitrate = cpu_to_le32(priv->can.data_bittiming.bitrate);
+
+	ret = can_rpmsg_cmd_send(hub, skb_cmd, &skb_rsp, sizeof(*cmd_rsp));
+	if (ret)
+		goto out;
+
+	cmd_rsp = (struct can_rpmsg_cmd_set_rate_rsp *)skb_rsp->data;
+	ret = le16_to_cpu(cmd_rsp->hdr.result);
+	if (ret)
+		goto out;
+
+	priv->can.bittiming.bitrate = le32_to_cpu(cmd_rsp->bitrate);
+	priv->can.data_bittiming.bitrate = le32_to_cpu(cmd_rsp->dbitrate);
+
+out:
+	mutex_unlock(&hub->curr_cmd.cmd_lock);
+	consume_skb(skb_rsp);
+
+	return ret;
+}
+
 static void can_rpmsg_set_bitrate_list(u32 mask, unsigned int size, u32 *data)
 {
 	unsigned int n = 1;
@@ -432,6 +479,7 @@ static int can_rpmsg_cmd_get_cfg(struct can_rpmsg_hub *hub, u32 index,
 		can_rpmsg_set_bitrate_list(le32_to_cpu(cmd_rsp->bitrate_mask),
 					   can->bitrate_const_cnt,
 					   (u32 *)can->bitrate_const);
+		can->do_set_bittiming = can_rpmsg_set_bittiming;
 	}
 
 	if (cmd_rsp->canfd) {
@@ -449,6 +497,7 @@ static int can_rpmsg_cmd_get_cfg(struct can_rpmsg_hub *hub, u32 index,
 		can_rpmsg_set_bitrate_list(le32_to_cpu(cmd_rsp->dbitrate_mask),
 					   can->data_bitrate_const_cnt,
 					   (u32 *)can->data_bitrate_const);
+		can->do_set_data_bittiming = can_rpmsg_set_bittiming;
 	}
 
 out:
