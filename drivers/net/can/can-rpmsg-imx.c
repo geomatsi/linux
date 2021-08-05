@@ -63,6 +63,8 @@ struct imx_oob_cm_ipc {
 	size_t req_size;
 	void *mem_rsp;
 	size_t rsp_size;
+	void *mem_evt;
+	size_t evt_size;
 	struct can_rpmsg_hub *hub;
 	struct device *dev;
 };
@@ -502,6 +504,8 @@ static void imx_oob_handle_rx(struct mbox_client *c, void *msg)
 	struct sk_buff *skb;
 	size_t len;
 	u32 type;
+	int ret;
+	u32 ack;
 
 	can_rpmsg_from_sig(signal, &type, &len);
 	dev_dbg(dev, "ctrl signal: type %u len %zu\n", type, len);
@@ -510,11 +514,25 @@ static void imx_oob_handle_rx(struct mbox_client *c, void *msg)
 	case CAN_RPMSG_CTRL_RSP:
 		skb = __dev_alloc_skb(len, GFP_ATOMIC);
 		if (unlikely(!skb)) {
-			dev_err(dev, "failed to allocate ctrl skb\n");
+			dev_err(dev, "failed to allocate ctrl response skb\n");
 			return;
 		}
 
 		memcpy(skb_put(skb, len), hub->ctrl->mem_rsp, len);
+		can_rpmsg_rx_ctrl_handler(hub, skb);
+		break;
+	case CAN_RPMSG_CTRL_EVT:
+		skb = __dev_alloc_skb(len, GFP_ATOMIC);
+		if (unlikely(!skb)) {
+			dev_err(dev, "failed to allocate ctrl event skb\n");
+			return;
+		}
+
+		memcpy(skb_put(skb, len), hub->ctrl->mem_evt, len);
+		ack = can_rpmsg_to_sig(CAN_RPMSG_CTRL_ACK, len);
+		ret = mbox_send_message(hub->ctrl->tx, (void *)&ack);
+		if (ret < 0)
+			dev_warn(dev, "failed to send signal: %d\n", ret);
 		can_rpmsg_rx_ctrl_handler(hub, skb);
 		break;
 	default:
@@ -596,11 +614,25 @@ static void can_rpmsg_event_work(struct work_struct *work)
 	struct rpmsg_device *rpdev = hub->rpdev;
 	struct device *dev = &rpdev->dev;
 	const struct can_rpmsg_evt *event;
+	struct can_rpmsg_evt_hb *ev_hb;
 	struct sk_buff *skb;
+	u16 event_id;
 
 	while ((skb = skb_dequeue(&hub->evq)) != NULL) {
 		event = (struct can_rpmsg_evt *)skb->data;
 		dev_dbg(dev, "processing event 0x%x\n", event->id);
+		event_id = le16_to_cpu(event->id);
+
+		switch (event_id) {
+		case CAN_RPMSG_EVT_HB:
+			ev_hb = (struct can_rpmsg_evt_hb *)event;
+			dev_info(dev, "CM4 HB: %u\n", le32_to_cpu(ev_hb->beat));
+			break;
+		default:
+			dev_warn(dev, "unknown event type: %u\n", event_id);
+			break;
+		}
+
 		dev_kfree_skb_any(skb);
 	}
 }
@@ -972,6 +1004,17 @@ static int plat_can_rpmsg_probe(struct platform_device *pdev)
 				goto out;
 			}
 		}
+
+		if (!strcmp(it.node->name, "ctrl_evt")) {
+			ipc->evt_size = rmem->size;
+			ipc->mem_evt = devm_ioremap_nocache(dev, rmem->base,
+							    rmem->size);
+			if (!ipc->mem_evt) {
+				dev_err(dev, "failed to map memory region\n");
+				ret = -EBUSY;
+				goto out;
+			}
+		}
 	}
 
 	if (!ipc->mem_req) {
@@ -986,10 +1029,18 @@ static int plat_can_rpmsg_probe(struct platform_device *pdev)
 		goto out;
 	}
 
+	if (!ipc->mem_evt) {
+		dev_err(dev, "failed to find 'ctrl_evt' memory region\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
 	dev_info(dev, "control path request buffer: start 0x%p size %zu\n",
 		 ipc->mem_req, ipc->req_size);
 	dev_info(dev, "control path response buffer: start 0x%p size %zu\n",
 		 ipc->mem_rsp, ipc->rsp_size);
+	dev_info(dev, "control path events buffer: start 0x%p size %zu\n",
+		 ipc->mem_evt, ipc->evt_size);
 	oob_ipc_handle = ipc;
 
 	ret = register_rpmsg_driver(&can_rpmsg_driver);

@@ -22,10 +22,19 @@ struct can_rpmsg_ctrl_hdr {
 
 /* events */
 
+enum can_rpmsg_evt_type {
+	CAN_RPMSG_EVT_HB	= 0x0001,
+};
+
 struct can_rpmsg_evt {
 	struct can_rpmsg_ctrl_hdr hdr;
 	__le16 id;
 	u8 rsvd[2];
+} __packed;
+
+struct can_rpmsg_evt_hb {
+	struct can_rpmsg_evt hdr;
+	__le32 beat;
 } __packed;
 
 /* commands */
@@ -34,6 +43,7 @@ enum can_rpmsg_ctrl_type {
 	CAN_RPMSG_CTRL_CMD = 1,
 	CAN_RPMSG_CTRL_RSP = 2,
 	CAN_RPMSG_CTRL_EVT = 3,
+	CAN_RPMSG_CTRL_ACK = 4,
 };
 
 enum can_rpmsg_cmd_type {
