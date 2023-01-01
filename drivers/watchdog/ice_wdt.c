@@ -164,7 +164,7 @@ static int ice_wdt_probe(struct platform_device *pdev)
 	watchdog_set_drvdata(&ice_wdt->wdt_dev, ice_wdt);
 
 	watchdog_init_timeout(&ice_wdt->wdt_dev, timeout, dev);
-	watchdog_set_restart_priority(&ice_wdt->wdt_dev, 128);
+	watchdog_set_restart_priority(&ice_wdt->wdt_dev, 255);
 
 	ice_wdt_stop(&ice_wdt->wdt_dev);
 
