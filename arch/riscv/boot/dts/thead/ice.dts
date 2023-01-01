@@ -65,6 +65,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		compatible = "simple-bus";
+		dma-noncoherent;
 		ranges;
 
 		reset: reset-sample {
