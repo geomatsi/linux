@@ -157,8 +157,9 @@ static int ice_wdt_probe(struct platform_device *pdev)
 	ice_wdt->wdt_dev.parent = dev;
 	ice_wdt->wdt_dev.info = &ice_wdt_info;
 	ice_wdt->wdt_dev.ops = &ice_wdt_ops;
-	ice_wdt->wdt_dev.timeout = ICE_WDT_TIMEOUT;
+	ice_wdt->wdt_dev.max_timeout = ICE_WDT_TIMEOUT;
 	ice_wdt->wdt_dev.min_timeout = 2;
+	ice_wdt->wdt_dev.timeout = ICE_WDT_TIMEOUT;
 
 	watchdog_set_drvdata(&ice_wdt->wdt_dev, ice_wdt);
 
